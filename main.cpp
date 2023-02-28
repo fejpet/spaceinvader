@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include <string>
 #include <memory>
@@ -8,7 +9,7 @@
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 
-const int WIDTH = 800, HEIGHT = 600;
+const int SCREEN_WIDTH = 800, SCREEN_HEIGHT = 600;
 
 // Define entity ID type
 using EntityID = unsigned int;
@@ -31,11 +32,20 @@ ComponentID GetComponentID()
 // Define ECS class
 class ECS
 {
+private:
+    EntityID GetNextEntityID()
+    {
+        static EntityID nextEntityId = 0;
+        return nextEntityId++;
+    }
+
 public:
     // Create entity with given ID
-    void CreateEntity(EntityID id)
+    EntityID CreateEntity()
     {
+        EntityID id = GetNextEntityID();
         m_entities.emplace_back(id);
+        return id;
     }
 
     // Destroy entity with given ID
@@ -139,10 +149,25 @@ private:
     std::vector<Entity> m_entities;
 };
 
+struct PlayerComponent
+{
+    std::string name;
+    int health;
+};
+
+struct EnemyComponent
+{
+    int health;
+};
+
 // Define components
 struct PositionComponent
 {
     float x, y;
+};
+struct ProjectileComponent
+{
+    int damage;
 };
 
 struct SpriteComponent
@@ -160,27 +185,107 @@ struct TextComponent
     SDL_Texture *texture;
 };
 
+struct VelocityComponent
+{
+    int x, y;
+};
+
+class EnemyMovementSystem
+{
+public:
+    // Update entity with given ID
+    void Update(float deltaTime, ECS &ecs)
+    {
+        bool changeDirection = false;
+        for (auto entity_id : ecs.GetEntities())
+        {
+            EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(entity_id);
+            PositionComponent *position = ecs.GetComponent<PositionComponent>(entity_id);
+            VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(entity_id);
+            auto text = ecs.GetComponent<TextComponent>(entity_id);
+            if (enemy != nullptr)
+            {
+                position->x += velocity->x * deltaTime;
+                position->y += velocity->y * deltaTime;
+
+                if (position->y < 0)
+                {
+                    std::cout << "item run out above id: " << entity_id << std::endl;
+                    // out of screen remove it
+                    ecs.DestroyEntity(entity_id);
+                }
+
+                if (enemy != nullptr)
+                { // enemy move need to check
+                    if (position->x > SCREEN_WIDTH - 64 || position->x < 10)
+                    {
+                        changeDirection = true;
+                    }
+                    std::stringstream ss;
+                    ss << "x:";
+                    ss << position->x;
+
+                    text->text = ss.str();
+                }
+            }
+        }
+        if (changeDirection)
+        {
+            for (auto entity_id : ecs.GetEntities())
+            {
+                EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(entity_id);
+                PositionComponent *position = ecs.GetComponent<PositionComponent>(entity_id);
+                VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(entity_id);
+                auto text = ecs.GetComponent<TextComponent>(entity_id);
+                if (enemy != nullptr)
+                {
+                    velocity->x = -1 * velocity->x;
+                    position->y += 32;
+                }
+                std::stringstream ss;
+                ss << "x:";
+                ss << position->x;
+
+                text->text = ss.str();
+            }
+        }
+    }
+};
+
 // Define systems
 class MovementSystem
 {
 public:
     // Update entity with given ID
-    void Update(EntityID id, PositionComponent &position)
+    void Update(float deltaTime, EntityID player_id, ECS &ecs)
     {
-        const Uint8 *currentKeyStates = SDL_GetKeyboardState(NULL);
-        if (currentKeyStates[SDL_SCANCODE_LEFT])
-        {
-            if (position.x > 0)
+        PlayerComponent *player = ecs.GetComponent<PlayerComponent>(player_id);
+        EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(player_id);
+        PositionComponent *position = ecs.GetComponent<PositionComponent>(player_id);
+        VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(player_id);
+        auto text = ecs.GetComponent<TextComponent>(player_id);
+        if (player != nullptr)
+        { // player move
+            const Uint8 *currentKeyStates = SDL_GetKeyboardState(NULL);
+            if (currentKeyStates[SDL_SCANCODE_LEFT])
             {
-                position.x -= 1.0f;
+                if (position->x > 0)
+                {
+                    position->x -= 1.0f;
+                }
             }
-        }
-        if (currentKeyStates[SDL_SCANCODE_RIGHT])
-        {
-            if (position.x + 64 < WIDTH)
+            if (currentKeyStates[SDL_SCANCODE_RIGHT])
             {
-                position.x += 1.0f;
+                if (position->x + 64 < SCREEN_WIDTH)
+                {
+                    position->x += 1.0f;
+                }
             }
+            std::stringstream ss;
+            ss << "x:";
+            ss << position->x;
+
+            text->text = ss.str();
         }
     }
 };
@@ -204,11 +309,95 @@ public:
     }
 };
 
+class ProjectileSystem
+{
+    SDL_Texture *projectileTexture;
+
+public:
+    ProjectileSystem(SDL_Texture *projectile_texture)
+    {
+        projectileTexture = projectile_texture;
+    }
+    void Update(float deltaTime, EntityID player_id, ECS &ecs)
+    {
+        // Check if the space bar is pressed
+        const Uint8 *state = SDL_GetKeyboardState(NULL);
+        bool space_down = false;
+
+        if (state[SDL_SCANCODE_SPACE])
+        {
+            if (!space_down)
+            {
+                space_down = true;
+                FireProjectile(player_id, ecs);
+            }
+        }
+        else
+        {
+            space_down = false;
+        }
+
+        for (auto entity_id : ecs.GetEntities())
+        {
+            PositionComponent *position = ecs.GetComponent<PositionComponent>(entity_id);
+            VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(entity_id);
+            ProjectileComponent *projectile = ecs.GetComponent<ProjectileComponent>(entity_id);
+
+            if (position && velocity && projectile)
+            {
+                position->x += velocity->x * deltaTime;
+                position->y += velocity->y * deltaTime;
+
+                if (position->y < 0)
+                {
+                    std::cout << "item run out above id: " << entity_id << std::endl;
+                    // out of screen remove it
+                    ecs.DestroyEntity(entity_id);
+                }
+
+                for (auto enemy_id : ecs.GetEntities())
+                {
+                    auto enemy = ecs.GetComponent<EnemyComponent>(enemy_id);
+                    if (enemy)
+                    {
+                        PositionComponent *enemyPos = ecs.GetComponent<PositionComponent>(enemy_id);
+
+                        SDL_Rect projectileLoc{static_cast<int>(position->x), static_cast<int>(position->y), 3, 10};
+                        SDL_Rect enemyLoc{static_cast<int>(enemyPos->x), static_cast<int>(enemyPos->y), 64, 64};
+                        if (SDL_HasIntersection(&projectileLoc, &enemyLoc))
+                        {
+                            std::cout << "Hit by:" << entity_id << " at :" << enemy_id << std::endl;
+                            ecs.DestroyEntity(entity_id);
+                            ecs.DestroyEntity(enemy_id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    void FireProjectile(EntityID player_id, ECS &ecs)
+    {
+        PlayerComponent *player = ecs.GetComponent<PlayerComponent>(player_id);
+        PositionComponent *position = ecs.GetComponent<PositionComponent>(player_id);
+        VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(player_id);
+        if (player != nullptr)
+        {
+            auto projectile_id = ecs.CreateEntity();
+            std::cout << "Fire projectile id:" << projectile_id << std::endl;
+            ecs.AddComponent<PositionComponent>(projectile_id, PositionComponent{position->x + 32, position->y - 30});
+            ecs.AddComponent<VelocityComponent>(projectile_id, VelocityComponent{0, -100});
+            ecs.AddComponent<ProjectileComponent>(projectile_id, ProjectileComponent{1});
+            ecs.AddComponent<SpriteComponent>(projectile_id, SpriteComponent{"", projectileTexture, 3, 10});
+        }
+    }
+};
+
 class TextRenderingSystem
 {
 public:
     // Render all entities with text and position components
-    void Render(SDL_Renderer *renderer, TTF_Font *font, ECS &ecs)
+    void Render(SDL_Renderer *renderer, ECS &ecs)
     {
         for (auto entity_id : ecs.GetEntities())
         {
@@ -216,15 +405,42 @@ public:
             auto text = ecs.GetComponent<TextComponent>(entity_id);
             if (position && text)
             {
+                // Load font
+                TTF_Font *font = TTF_OpenFont(text->font.c_str(), text->size);
+                if (font == nullptr)
+                {
+                    continue;
+                }
                 SDL_Surface *surfaceMessage = TTF_RenderText_Solid(font, text->text.c_str(), {255, 255, 255});
                 text->texture = SDL_CreateTextureFromSurface(renderer, surfaceMessage);
-                SDL_Rect dstRect{static_cast<int>(position->x), static_cast<int>(position->y), surfaceMessage->w, surfaceMessage->h};
+                SDL_Rect dstRect{static_cast<int>(position->x), static_cast<int>(position->y - 5), surfaceMessage->w, surfaceMessage->h};
                 SDL_RenderCopy(renderer, text->texture, NULL, &dstRect);
                 SDL_FreeSurface(surfaceMessage);
+                TTF_CloseFont(font);
             }
         }
     }
 };
+
+SDL_Texture *LoadTexture(std::string path, SDL_Renderer *renderer)
+{
+    SDL_Surface *surface = IMG_Load(path.c_str());
+    if (surface == nullptr)
+    {
+        std::cout << "IMG_Load Error: " << IMG_GetError() << std::endl;
+        return nullptr;
+    }
+
+    SDL_Texture *sprite_texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (sprite_texture == nullptr)
+    {
+        std::cout << "SDL_CreateTextureFromSurface Error: " << SDL_GetError() << std::endl;
+        SDL_FreeSurface(surface);
+        return nullptr;
+    }
+    SDL_FreeSurface(surface);
+    return sprite_texture;
+}
 
 // Main function
 int main(int argc, char *argv[])
@@ -252,7 +468,7 @@ int main(int argc, char *argv[])
     }
 
     // Create SDL window
-    SDL_Window *window = SDL_CreateWindow("SDL Game", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, WIDTH, HEIGHT, SDL_WINDOW_SHOWN);
+    SDL_Window *window = SDL_CreateWindow("SDL Game", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
     if (window == nullptr)
     {
         std::cout << "SDL_CreateWindow Error: " << SDL_GetError() << std::endl;
@@ -269,57 +485,74 @@ int main(int argc, char *argv[])
         SDL_Quit();
         return 1;
     }
-    // Load font
-    TTF_Font *font = TTF_OpenFont("resources/arial.ttf", 28);
-    if (font == nullptr)
-    {
-        std::cout << "TTF_OpenFont Error: " << TTF_GetError() << std::endl;
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
 
     // Load sprite
-    SDL_Surface *surface = IMG_Load("resources/ship.png");
-    if (surface == nullptr)
+    std::string playerTexturePath = "resources/ship.png";
+    SDL_Texture *player_texture = LoadTexture(playerTexturePath, renderer);
+    if (player_texture == nullptr)
     {
-        std::cout << "IMG_Load Error: " << IMG_GetError() << std::endl;
+        std::cout << "Player Texture Load Error: " << playerTexturePath << std::endl;
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
 
-    SDL_Texture *sprite_texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (sprite_texture == nullptr)
+    std::string enemyTexturePath = "resources/enemy.png";
+    SDL_Texture *enemy_texture = LoadTexture(enemyTexturePath, renderer);
+    if (enemy_texture == nullptr)
     {
-        std::cout << "SDL_CreateTextureFromSurface Error: " << SDL_GetError() << std::endl;
-        SDL_FreeSurface(surface);
+        std::cout << "Enemy Texture Load Error: " << enemyTexturePath << std::endl;
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
-    SDL_FreeSurface(surface);
+
+    std::string projectileTexturePath = "resources/projectile.png";
+    SDL_Texture *projectile_texture = LoadTexture(projectileTexturePath, renderer);
+    if (projectile_texture == nullptr)
+    {
+        std::cout << "Enemy Texture Load Error: " << projectileTexturePath << std::endl;
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
 
     std::cout << "start create ECS" << std::endl;
     // Create entity-component system
     ECS ecs;
 
     // Create player entity
-    EntityID player_id = 1;
-    ecs.CreateEntity(player_id);
-    ecs.AddComponent(player_id, PositionComponent{320.0f, HEIGHT - 64});
-    ecs.AddComponent(player_id, SpriteComponent{"", sprite_texture, 64, 64});
+    EntityID player_id = ecs.CreateEntity();
+    ecs.AddComponent(player_id, PositionComponent{320.0f, SCREEN_HEIGHT - 64});
+    ecs.AddComponent(player_id, PlayerComponent{"Player 1", 10});
+    ecs.AddComponent(player_id, SpriteComponent{"", player_texture, 64, 64});
     ecs.AddComponent(player_id, TextComponent{"Player", "resources/arial.ttf", 28, nullptr});
 
+    int textureSize = 64;
+    int enemyLines = 3;
+    for (size_t j = 0; j < enemyLines; j++)
+    {
+        for (size_t i = 10; i < SCREEN_WIDTH - textureSize; i += (textureSize * 2))
+        {
+            EntityID enemy_id = ecs.CreateEntity();
+            ecs.AddComponent(enemy_id, PositionComponent{(float)i, (float)j * textureSize});
+            ecs.AddComponent(enemy_id, SpriteComponent{"", enemy_texture, 64, 64});
+            ecs.AddComponent(enemy_id, TextComponent{"Enemy", "resources/arial.ttf", 10, nullptr});
+            ecs.AddComponent(enemy_id, VelocityComponent{10, 0});
+            ecs.AddComponent(enemy_id, EnemyComponent{1});
+        }
+    }
     // Define systems
     MovementSystem movement_system;
     RenderingSystem rendering_system;
     TextRenderingSystem text_rendering_system;
+    ProjectileSystem projectile_system(projectile_texture);
 
     // Start game loop
+    uint32_t previousTime = SDL_GetTicks();
     bool quit = false;
     SDL_Event event;
     std::cout << "before loop" << std::endl;
@@ -335,22 +568,28 @@ int main(int argc, char *argv[])
                 break;
             }
         }
-
+        uint32_t currentTime = SDL_GetTicks();
+        float deltaTime = (currentTime - previousTime) / 1000.0f;
+        previousTime = currentTime;
         // Update game state
-        movement_system.Update(player_id, *ecs.GetComponent<PositionComponent>(player_id));
-
-        // Render game state
+        //*ecs.GetComponent<PositionComponent>(player_id)
+        movement_system.Update(deltaTime, player_id, ecs);
+        projectile_system.Update(deltaTime, player_id, ecs);
+        //  Render game state
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+
         rendering_system.Render(renderer, ecs);
-        //  text_rendering_system.Render(renderer, font, ecs);
+        text_rendering_system.Render(renderer, ecs);
 
         SDL_RenderPresent(renderer);
     }
 
     // Clean up
-    TTF_CloseFont(font);
-    SDL_DestroyTexture(sprite_texture);
+
+    SDL_DestroyTexture(player_texture);
+    SDL_DestroyTexture(enemy_texture);
+    SDL_DestroyTexture(projectile_texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
