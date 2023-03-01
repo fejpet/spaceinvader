@@ -224,9 +224,6 @@ struct InputSystem
                 InputComponent *input = ecs.GetComponent<InputComponent>(entity_id);
                 if (input)
                 {
-                    std::cout << "Entity handling event: " << entity_id << std::endl;
-                    // input->Reset();
-
                     switch (event.key.keysym.sym)
                     {
                     case SDLK_UP:
@@ -260,61 +257,37 @@ struct InputSystem
 
 class EnemyMovementSystem
 {
+    const float speed = 5.0f;
+
 public:
     // Update entity with given ID
     void Update(float deltaTime, ECS &ecs)
     {
-        bool changeDirection = false;
         for (auto entity_id : ecs.GetEntities())
         {
             EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(entity_id);
             PositionComponent *position = ecs.GetComponent<PositionComponent>(entity_id);
             VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(entity_id);
-            auto text = ecs.GetComponent<TextComponent>(entity_id);
-            if (enemy != nullptr)
+
+            if (enemy && position && velocity)
             {
                 position->x += velocity->x * deltaTime;
-                position->y += velocity->y * deltaTime;
 
-                if (position->y < 0)
+                if (position->x < 10 || position->x > SCREEN_WIDTH - 64)
                 {
-                    std::cout << "item run out above id: " << entity_id << std::endl;
-                    // out of screen remove it
-                    ecs.DestroyEntity(entity_id);
-                }
-
-                if (enemy != nullptr)
-                { // enemy move need to check
-                    if (position->x > SCREEN_WIDTH - 64 || position->x < 10)
+                    // all enemy one line down and reverse direction
+                    for (auto enemy_id : ecs.GetEntities())
                     {
-                        changeDirection = true;
+                        EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(enemy_id);
+                        PositionComponent *position = ecs.GetComponent<PositionComponent>(enemy_id);
+                        VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(enemy_id);
+                        if (enemy && position && velocity)
+                        {
+                            position->y += 64;
+                            velocity->x = velocity->x * -1;
+                        }
                     }
-                    std::stringstream ss;
-                    ss << "x:";
-                    ss << position->x;
-
-                    text->text = ss.str();
                 }
-            }
-        }
-        if (changeDirection)
-        {
-            for (auto entity_id : ecs.GetEntities())
-            {
-                EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(entity_id);
-                PositionComponent *position = ecs.GetComponent<PositionComponent>(entity_id);
-                VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(entity_id);
-                auto text = ecs.GetComponent<TextComponent>(entity_id);
-                if (enemy != nullptr)
-                {
-                    velocity->x = -1 * velocity->x;
-                    position->y += 32;
-                }
-                std::stringstream ss;
-                ss << "x:";
-                ss << position->x;
-
-                text->text = ss.str();
             }
         }
     }
@@ -323,34 +296,37 @@ public:
 // Define systems
 class MovementSystem
 {
-    const float speed = 3.0f;
+    const float speed = 5.0f;
 
 public:
     // Update entity with given ID
     void Update(float deltaTime, EntityID player_id, ECS &ecs)
     {
-        PlayerComponent *player = ecs.GetComponent<PlayerComponent>(player_id);
-        EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(player_id);
+        InputComponent *input = ecs.GetComponent<InputComponent>(player_id);
         PositionComponent *position = ecs.GetComponent<PositionComponent>(player_id);
         VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(player_id);
         auto text = ecs.GetComponent<TextComponent>(player_id);
-        if (player != nullptr)
-        { // player move
-            const Uint8 *currentKeyStates = SDL_GetKeyboardState(NULL);
-            if (currentKeyStates[SDL_SCANCODE_LEFT])
+
+        if (input && position)
+        {
+            if (input->left)
             {
                 if (position->x > 0)
                 {
                     position->x -= speed;
                 }
             }
-            if (currentKeyStates[SDL_SCANCODE_RIGHT])
+            else if (input->right)
             {
-                if (position->x + 64 < SCREEN_WIDTH)
+                if (position->x < SCREEN_WIDTH - 64)
                 {
                     position->x += speed;
                 }
             }
+        }
+
+        if (text)
+        {
             std::stringstream ss;
             ss << "x:";
             ss << position->x;
@@ -615,6 +591,8 @@ int main(int argc, char *argv[])
     }
     // Define systems
     MovementSystem movement_system;
+    EnemyMovementSystem enemy_movement_system;
+
     RenderingSystem rendering_system;
     TextRenderingSystem text_rendering_system;
     ProjectileSystem projectile_system(projectile_texture);
@@ -644,8 +622,8 @@ int main(int argc, char *argv[])
         float deltaTime = (currentTime - previousTime) / 1000.0f;
         previousTime = currentTime;
         // Update game state
-        //*ecs.GetComponent<PositionComponent>(player_id)
         movement_system.Update(deltaTime, player_id, ecs);
+        enemy_movement_system.Update(deltaTime, ecs);
         projectile_system.Update(deltaTime, player_id, ecs);
         //  Render game state
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
