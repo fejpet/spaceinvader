@@ -199,18 +199,6 @@ struct InputComponent
     bool shoot;
     bool restart;
     bool quit;
-
-    void Reset()
-    {
-        up = false;
-        down = false;
-        left = false;
-        right = false;
-        spacebar = false;
-        shoot = false;
-        restart = false;
-        quit = false;
-    }
 };
 
 struct InputSystem
@@ -261,8 +249,9 @@ class EnemyMovementSystem
 
 public:
     // Update entity with given ID
-    void Update(float deltaTime, ECS &ecs)
+    void Update(float deltaTime, EntityID player_id, ECS &ecs)
     {
+        PositionComponent *playerPosition = ecs.GetComponent<PositionComponent>(player_id);
         for (auto entity_id : ecs.GetEntities())
         {
             EnemyComponent *enemy = ecs.GetComponent<EnemyComponent>(entity_id);
@@ -287,6 +276,29 @@ public:
                             velocity->x = velocity->x * -1;
                         }
                     }
+                }
+
+                if (position->y > SCREEN_HEIGHT)
+                {
+                    std::cout << "Enemy out of screen:" << entity_id << std::endl;
+                    ecs.DestroyEntity(entity_id);
+                }
+
+                if (playerPosition)
+                {
+                    SDL_Rect enemyLoc{static_cast<int>(position->x), static_cast<int>(position->y), 64, 64};
+                    SDL_Rect playerLoc{static_cast<int>(playerPosition->x), static_cast<int>(playerPosition->y), 64, 64};
+                    if (SDL_HasIntersection(&playerLoc, &enemyLoc))
+                    {
+                        std::cout << "Player catched by:" << entity_id << " cached player" << std::endl;
+                        ecs.DestroyEntity(entity_id);
+                        ecs.DestroyEntity(player_id);
+                        playerPosition = nullptr;
+                    }
+                }
+                else
+                {
+                    std::cout << "no player" << std::endl;
                 }
             }
         }
@@ -391,7 +403,7 @@ public:
 
                 if (position->y < 0)
                 {
-                    std::cout << "item run out above id: " << entity_id << std::endl;
+                    std::cout << "projectile missed: " << entity_id << std::endl;
                     // out of screen remove it
                     ecs.DestroyEntity(entity_id);
                 }
@@ -460,6 +472,53 @@ public:
                 TTF_CloseFont(font);
             }
         }
+    }
+};
+
+class HUDSystem
+{
+
+public:
+    void Render(SDL_Renderer *renderer, ECS &ecs, EntityID player_id)
+    {
+        TTF_Font *font = TTF_OpenFont("resources/arial.ttf", 12);
+        if (font == nullptr)
+        {
+            return;
+        }
+        int numberOfEnemies = 0;
+        int numberOfObject = 0;
+        for (auto entity_id : ecs.GetEntities())
+        {
+            auto enemy = ecs.GetComponent<EnemyComponent>(entity_id);
+            if (enemy)
+            {
+                numberOfEnemies++;
+            }
+            numberOfObject++;
+        }
+
+        std::stringstream ss;
+        ss << "Enemy:";
+        ss << numberOfEnemies;
+
+        SDL_Surface *surfaceMessage = TTF_RenderText_Solid(font, ss.str().c_str(), {255, 255, 255});
+        auto texture = SDL_CreateTextureFromSurface(renderer, surfaceMessage);
+        SDL_Rect dstRect{0, 0, surfaceMessage->w, surfaceMessage->h};
+        SDL_RenderCopy(renderer, texture, NULL, &dstRect);
+        SDL_FreeSurface(surfaceMessage);
+
+        std::stringstream ss2;
+        ss2 << "Object:";
+        ss2 << numberOfObject;
+
+        SDL_Surface *surfaceMessage2 = TTF_RenderText_Solid(font, ss2.str().c_str(), {255, 255, 255});
+        auto texture2 = SDL_CreateTextureFromSurface(renderer, surfaceMessage2);
+        SDL_Rect dstRect2{SCREEN_WIDTH - surfaceMessage2->w, 0, surfaceMessage2->w, surfaceMessage2->h};
+        SDL_RenderCopy(renderer, texture2, NULL, &dstRect2);
+        SDL_FreeSurface(surfaceMessage2);
+
+        TTF_CloseFont(font);
     }
 };
 
@@ -582,16 +641,20 @@ int main(int argc, char *argv[])
         for (size_t i = 10; i < SCREEN_WIDTH - textureSize; i += (textureSize * 2))
         {
             EntityID enemy_id = ecs.CreateEntity();
+
+            std::stringstream ss;
+            ss << enemy_id;
             ecs.AddComponent(enemy_id, PositionComponent{(float)i, (float)j * textureSize});
             ecs.AddComponent(enemy_id, SpriteComponent{"", enemy_texture, 64, 64});
-            ecs.AddComponent(enemy_id, TextComponent{"Enemy", "resources/arial.ttf", 10, nullptr});
-            ecs.AddComponent(enemy_id, VelocityComponent{10, 0});
+            ecs.AddComponent(enemy_id, TextComponent{ss.str().c_str(), "resources/arial.ttf", 10, nullptr});
+            ecs.AddComponent(enemy_id, VelocityComponent{50, 0});
             ecs.AddComponent(enemy_id, EnemyComponent{1});
         }
     }
     // Define systems
     MovementSystem movement_system;
     EnemyMovementSystem enemy_movement_system;
+    HUDSystem hud_system;
 
     RenderingSystem rendering_system;
     TextRenderingSystem text_rendering_system;
@@ -623,12 +686,12 @@ int main(int argc, char *argv[])
         previousTime = currentTime;
         // Update game state
         movement_system.Update(deltaTime, player_id, ecs);
-        enemy_movement_system.Update(deltaTime, ecs);
+        enemy_movement_system.Update(deltaTime, player_id, ecs);
         projectile_system.Update(deltaTime, player_id, ecs);
         //  Render game state
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-
+        hud_system.Render(renderer, ecs, player_id);
         rendering_system.Render(renderer, ecs);
         text_rendering_system.Render(renderer, ecs);
 
