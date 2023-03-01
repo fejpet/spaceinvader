@@ -189,6 +189,74 @@ struct VelocityComponent
 {
     int x, y;
 };
+struct InputComponent
+{
+    bool up;
+    bool down;
+    bool left;
+    bool right;
+    bool spacebar;
+    bool shoot;
+    bool restart;
+    bool quit;
+
+    void Reset()
+    {
+        up = false;
+        down = false;
+        left = false;
+        right = false;
+        spacebar = false;
+        shoot = false;
+        restart = false;
+        quit = false;
+    }
+};
+
+struct InputSystem
+{
+    void handleEvent(const SDL_Event &event, ECS &ecs)
+    {
+        if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)
+        {
+            for (auto entity_id : ecs.GetEntities())
+            {
+                InputComponent *input = ecs.GetComponent<InputComponent>(entity_id);
+                if (input)
+                {
+                    std::cout << "Entity handling event: " << entity_id << std::endl;
+                    // input->Reset();
+
+                    switch (event.key.keysym.sym)
+                    {
+                    case SDLK_UP:
+                        input->up = event.type == SDL_KEYDOWN;
+                        break;
+                    case SDLK_DOWN:
+                        input->down = event.type == SDL_KEYDOWN;
+                        break;
+                    case SDLK_LEFT:
+                        input->left = event.type == SDL_KEYDOWN;
+                        break;
+                    case SDLK_RIGHT:
+                        input->right = event.type == SDL_KEYDOWN;
+                        break;
+                    case SDLK_RETURN:
+                        input->restart = event.type == SDL_KEYDOWN;
+                        break;
+                    case SDLK_SPACE:
+                        input->shoot = (event.type == SDL_KEYDOWN && !input->spacebar);
+                        input->spacebar = (event.type == SDL_KEYDOWN);
+                        break;
+                    case SDLK_ESCAPE:
+                        input->quit = event.type == SDL_KEYDOWN;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+};
 
 class EnemyMovementSystem
 {
@@ -255,6 +323,8 @@ public:
 // Define systems
 class MovementSystem
 {
+    const float speed = 3.0f;
+
 public:
     // Update entity with given ID
     void Update(float deltaTime, EntityID player_id, ECS &ecs)
@@ -271,14 +341,14 @@ public:
             {
                 if (position->x > 0)
                 {
-                    position->x -= 1.0f;
+                    position->x -= speed;
                 }
             }
             if (currentKeyStates[SDL_SCANCODE_RIGHT])
             {
                 if (position->x + 64 < SCREEN_WIDTH)
                 {
-                    position->x += 1.0f;
+                    position->x += speed;
                 }
             }
             std::stringstream ss;
@@ -321,27 +391,22 @@ public:
     void Update(float deltaTime, EntityID player_id, ECS &ecs)
     {
         // Check if the space bar is pressed
-        const Uint8 *state = SDL_GetKeyboardState(NULL);
-        bool space_down = false;
-
-        if (state[SDL_SCANCODE_SPACE])
-        {
-            if (!space_down)
-            {
-                space_down = true;
-                FireProjectile(player_id, ecs);
-            }
-        }
-        else
-        {
-            space_down = false;
-        }
-
         for (auto entity_id : ecs.GetEntities())
         {
+            InputComponent *input = ecs.GetComponent<InputComponent>(entity_id);
             PositionComponent *position = ecs.GetComponent<PositionComponent>(entity_id);
             VelocityComponent *velocity = ecs.GetComponent<VelocityComponent>(entity_id);
             ProjectileComponent *projectile = ecs.GetComponent<ProjectileComponent>(entity_id);
+
+            // handle input
+            if (input)
+            {
+                if (input->shoot)
+                {
+                    FireProjectile(entity_id, ecs);
+                    input->shoot = false;
+                }
+            }
 
             if (position && velocity && projectile)
             {
@@ -525,11 +590,14 @@ int main(int argc, char *argv[])
     ECS ecs;
 
     // Create player entity
+    InputComponent playerInputComponent = InputComponent{false, false, false, false, false, false, false, false};
+
     EntityID player_id = ecs.CreateEntity();
     ecs.AddComponent(player_id, PositionComponent{320.0f, SCREEN_HEIGHT - 64});
     ecs.AddComponent(player_id, PlayerComponent{"Player 1", 10});
     ecs.AddComponent(player_id, SpriteComponent{"", player_texture, 64, 64});
     ecs.AddComponent(player_id, TextComponent{"Player", "resources/arial.ttf", 28, nullptr});
+    ecs.AddComponent(player_id, playerInputComponent);
 
     int textureSize = 64;
     int enemyLines = 3;
@@ -550,6 +618,7 @@ int main(int argc, char *argv[])
     RenderingSystem rendering_system;
     TextRenderingSystem text_rendering_system;
     ProjectileSystem projectile_system(projectile_texture);
+    InputSystem input_system;
 
     // Start game loop
     uint32_t previousTime = SDL_GetTicks();
@@ -561,13 +630,16 @@ int main(int argc, char *argv[])
         // Process events
         while (SDL_PollEvent(&event))
         {
-            switch (event.type)
+            if (event.type == SDL_QUIT || playerInputComponent.quit)
             {
-            case SDL_QUIT:
+                std::cout << "exiting" << std::endl;
                 quit = true;
                 break;
             }
+            input_system.handleEvent(event, ecs);
         }
+        // collected events
+
         uint32_t currentTime = SDL_GetTicks();
         float deltaTime = (currentTime - previousTime) / 1000.0f;
         previousTime = currentTime;
